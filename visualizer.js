@@ -207,7 +207,7 @@ function avg(arr, start, end) {
 function animate() {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
-    const { bass, mid, treble, avg } = getFrequencyBands();
+    const { subBass, bass, lowMid, mid, highMid, treble, beat, onset } = getFrequencyBands();
 
     if (mesh) {
         if (settings.geometry === "sphere") {
@@ -227,6 +227,11 @@ function animate() {
             const primary = new THREE.Color(settings.colorPrimary);
             const secondary = new THREE.Color(settings.colorSecondary);
             mesh.material.emissive = primary.clone().lerp(secondary, bass).multiplyScalar(bass * 0.6);
+        }
+
+        if (beat) {
+            mesh.scale.setScalar(1.3);
+            mesh.scale.lerp(new THREE.Vector3(1, 1, 1), 0.08);
         }
     }
 
