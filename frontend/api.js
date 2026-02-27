@@ -1,4 +1,4 @@
-const API_BASE = "https://your-app.onrender.com"; // Replace with your Render URL
+const API_BASE = "https://audiovisualizer-production.up.railway.app"
 
 export async function savePreset(preset) {
     const resp = await fetch(`${API_BASE}/presets`, {
