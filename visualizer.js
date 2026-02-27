@@ -153,21 +153,48 @@ export async function loadAudio(file) {
 
 // ─── Animate ─────────────────────────────────────────────────────────────────
 
+const energyHistory = new Array(43).fill(0);
+let prevTreble = 0;
+
+function getBand(low, high) {
+    const nyquist = 24000;
+    const binSize = nyquist / analyser.frequencyBinCount;
+    const start = Math.floor(low / binSize);
+    const end = Math.floor(high / binSize);
+    let sum = 0;
+    for (let i = start; i < end; i++) sum += dataArray[i];
+    return (sum / (end - start) / 255) * settings.sensitivity;
+}
+
+function isBeat() {
+    let energy = 0;
+    for (let i = 0; i < 10; i++) energy += dataArray[i] ** 2;
+    energy /= 10;
+
+    const avgEnergy = energyHistory.reduce((a, b) => a + b) / energyHistory.length;
+    energyHistory.shift();
+    energyHistory.push(energy);
+
+    return energy > avgEnergy * 1.4;
+}
+
 function getFrequencyBands() {
-    if (!analyser) return { bass: 0, mid: 0, treble: 0, avg: 0 };
+    if (!analyser) return { subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0, beat: false, onset: false };
     analyser.getByteFrequencyData(dataArray);
 
-    const len = dataArray.length;
-    const bass   = avg(dataArray, 0,              Math.floor(len * 0.06));
-    const mid    = avg(dataArray, Math.floor(len * 0.06), Math.floor(len * 0.35));
-    const treble = avg(dataArray, Math.floor(len * 0.35), len);
-    const total  = avg(dataArray, 0, len);
+    const treble = getBand(4000, 16000);
+    const onset = (treble - prevTreble) > 0.15;
+    prevTreble = treble;
 
     return {
-        bass:   (bass   / 255) * settings.sensitivity,
-        mid:    (mid    / 255) * settings.sensitivity,
-        treble: (treble / 255) * settings.sensitivity,
-        avg:    (total  / 255) * settings.sensitivity,
+        subBass:  getBand(20, 60),
+        bass:     getBand(60, 250),
+        lowMid:   getBand(250, 500),
+        mid:      getBand(500, 2000),
+        highMid:  getBand(2000, 4000),
+        treble,
+        beat:     isBeat(),
+        onset,
     };
 }
 
