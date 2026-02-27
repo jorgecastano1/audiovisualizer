@@ -5,6 +5,10 @@ let analyser, dataArray;
 let settings = {};
 let audioCtx;
 let clock;
+let rings = [];
+let orbs = [];
+let bgLights = [];
+let flashMesh;
 
 // ─── Scene Init ──────────────────────────────────────────────────────────────
 
@@ -68,6 +72,81 @@ export function buildScene(newSettings) {
     } else if (settings.geometry === "particles") {
         buildParticles(primary);
     }
+    buildBackground();
+}
+
+function buildBackground() {
+    // Clear old background elements
+    rings.forEach(r => scene.remove(r));
+    orbs.forEach(o => scene.remove(o));
+    bgLights.forEach(l => scene.remove(l));
+    if (flashMesh) scene.remove(flashMesh);
+    rings = []; orbs = []; bgLights = [];
+
+    const primary   = new THREE.Color(settings.colorPrimary);
+    const secondary = new THREE.Color(settings.colorSecondary);
+
+    // ── Pulse rings (subBass) ──────────────────────
+    for (let i = 0; i < 4; i++) {
+        const geo = new THREE.RingGeometry(2.5 + i * 1.2, 2.6 + i * 1.2, 64);
+        const mat = new THREE.MeshBasicMaterial({
+            color: primary,
+            transparent: true,
+            opacity: 0.0,
+            side: THREE.DoubleSide,
+        });
+        const ring = new THREE.Mesh(geo, mat);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = -1.5;
+        scene.add(ring);
+        rings.push(ring);
+    }
+
+    // ── Point lights (bass) ────────────────────────
+    const lightPositions = [
+        [4, 2, -3], [-4, -2, -3], [0, 4, -5], [3, -3, -4]
+    ];
+    lightPositions.forEach(([x, y, z], i) => {
+        const light = new THREE.PointLight(
+            i % 2 === 0 ? primary : secondary,
+            0, 12
+        );
+        light.position.set(x, y, z);
+        scene.add(light);
+        bgLights.push(light);
+    });
+
+    // ── Floating orbs (mid) ────────────────────────
+    for (let i = 0; i < 6; i++) {
+        const geo = new THREE.SphereGeometry(0.08 + Math.random() * 0.1, 16, 16);
+        const mat = new THREE.MeshBasicMaterial({
+            color: i % 2 === 0 ? primary : secondary,
+            transparent: true,
+            opacity: 0.6,
+        });
+        const orb = new THREE.Mesh(geo, mat);
+        orb.position.set(
+            (Math.random() - 0.5) * 10,
+            (Math.random() - 0.5) * 6,
+            (Math.random() - 0.5) * 4 - 2
+        );
+        orb._basePosition = orb.position.clone();
+        orb._phase = Math.random() * Math.PI * 2;
+        scene.add(orb);
+        orbs.push(orb);
+    }
+
+    // ── Full screen flash mesh (onset) ────────────
+    const flashGeo = new THREE.PlaneGeometry(40, 40);
+    const flashMat = new THREE.MeshBasicMaterial({
+        color: primary,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+    });
+    flashMesh = new THREE.Mesh(flashGeo, flashMat);
+    flashMesh.position.z = -8;
+    scene.add(flashMesh);
 }
 
 function buildSphere(primary) {
@@ -204,10 +283,53 @@ function avg(arr, start, end) {
     return sum / (end - start);
 }
 
+function animateBackground(bands) {
+    if (!flashMesh) return;
+    const { subBass, bass, lowMid, mid, treble, onset } = bands;
+    const time = Date.now() * 0.001;
+    const primary   = new THREE.Color(settings.colorPrimary);
+    const secondary = new THREE.Color(settings.colorSecondary);
+
+    rings.forEach((ring, i) => {
+        const delay = i * 0.15;
+        const pulse = Math.max(0, subBass - delay * 0.3);
+        ring.scale.setScalar(1 + pulse * 1.8);
+        ring.material.opacity = pulse * 0.35;
+        ring.material.color.lerpColors(primary, secondary, subBass);
+    });
+
+    bgLights.forEach((light, i) => {
+        light.intensity = bass * 6 + 0.2;
+        light.color.lerpColors(
+            i % 2 === 0 ? primary : secondary,
+            i % 2 === 0 ? secondary : primary,
+            bass
+        );
+        const angle = time * 0.3 + (i * Math.PI / 2);
+        light.position.x = Math.cos(angle) * 4;
+        light.position.z = Math.sin(angle) * 4 - 2;
+    });
+
+    orbs.forEach((orb, i) => {
+        const phase = orb._phase;
+        orb.position.x = orb._basePosition.x + Math.sin(time * 0.4 + phase) * (0.3 + mid * 1.2);
+        orb.position.y = orb._basePosition.y + Math.cos(time * 0.3 + phase) * (0.3 + mid * 0.8);
+        orb.material.opacity = 0.3 + mid * 0.7;
+        const scale = 1 + mid * 2 + treble * 0.5;
+        orb.scale.setScalar(scale);
+        orb.material.color.lerpColors(primary, secondary, (Math.sin(time + phase) + 1) / 2);
+    });
+
+    if (onset) flashMesh.material.opacity = 0.08;
+    flashMesh.material.opacity *= 0.82;
+    flashMesh.material.color.copy(primary);
+}
+
 function animate() {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
-    const { subBass, bass, lowMid, mid, highMid, treble, beat, onset } = getFrequencyBands();
+    const bands = getFrequencyBands();
+    const { subBass, bass, lowMid, mid, highMid, treble, beat, onset } = bands;
 
     if (mesh) {
         if (settings.geometry === "sphere") {
@@ -215,24 +337,20 @@ function animate() {
         } else if (settings.geometry === "torus") {
             mesh.rotation.x += delta * settings.rotationSpeed * (1 + mid);
             mesh.rotation.y += delta * settings.rotationSpeed * 1.3 * (1 + bass);
-            mesh.scale.setScalar(1 + bass * 0.4);
         } else if (settings.geometry === "icosahedron") {
             mesh.rotation.y += delta * settings.rotationSpeed * (1 + mid * 0.5);
             mesh.rotation.z += delta * settings.rotationSpeed * 0.5;
             animateVertices(mesh, bass, mid);
         }
 
-        // Color pulse
         if (mesh.material && !settings.wireframe) {
             const primary = new THREE.Color(settings.colorPrimary);
             const secondary = new THREE.Color(settings.colorSecondary);
             mesh.material.emissive = primary.clone().lerp(secondary, bass).multiplyScalar(bass * 0.6);
         }
 
-        if (beat) {
-            mesh.scale.setScalar(1.3);
-            mesh.scale.lerp(new THREE.Vector3(1, 1, 1), 0.08);
-        }
+        if (beat) mesh.scale.setScalar(1.3);
+        mesh.scale.lerp(new THREE.Vector3(1, 1, 1), 0.08);
     }
 
     if (particles) {
@@ -246,8 +364,11 @@ function animate() {
         particles.material.size = 0.04 + bass * 0.06;
     }
 
+    animateBackground(bands);
     renderer.render(scene, camera);
 }
+
+
 
 function animateSphere(bass, mid, treble) {
     const pos = mesh.geometry.attributes.position;
