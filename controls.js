@@ -1,4 +1,4 @@
-import { savePreset, fetchPreset, listPresets, getShareURL, getPresetIdFromURL } from "./api.js";
+import { savePreset, fetchPreset, listPresets, renamePreset, getShareURL, getPresetIdFromURL } from "./api.js";
 
 export const defaults = {
     geometry: "sphere",
@@ -111,11 +111,24 @@ async function loadPresetList() {
         presets.forEach(p => {
             const item = document.createElement("div");
             item.className = "preset-item";
-            item.innerHTML = `<span class="preset-name">${p.name}</span><span class="preset-id">#${p.id}</span>`;
-            item.addEventListener("click", async () => {
+            item.innerHTML = `<span class="preset-name">${p.name}</span><span class="preset-id">#${p.id}</span><button type="button" class="preset-rename-btn" title="Rename preset" aria-label="Rename preset">✎</button>`;
+            const renameBtn = item.querySelector(".preset-rename-btn");
+            renameBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                const newName = prompt("New preset name:", p.name);
+                if (newName == null || newName.trim() === "") return;
+                try {
+                    await renamePreset(p.id, newName.trim());
+                    await loadPresetList();
+                    showToast(`Renamed to "${newName.trim()}"`);
+                } catch {
+                    showToast("✗ Failed to rename preset", true);
+                }
+            });
+            item.addEventListener("click", async (e) => {
+                if (e.target.closest(".preset-rename-btn")) return;
                 try {
                     const full = await fetchPreset(p.id);
-                    // applyPreset will be called by the click handler set in main
                     document.dispatchEvent(new CustomEvent("loadPreset", { detail: full }));
                     showToast(`Loaded: "${full.name}"`);
                 } catch {

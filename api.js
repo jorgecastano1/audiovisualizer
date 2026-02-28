@@ -22,6 +22,16 @@ export async function listPresets() {
     return resp.json();
 }
 
+export async function renamePreset(id, newName) {
+    const resp = await fetch(`${API_BASE}/presets/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+    });
+    if (!resp.ok) throw new Error("Failed to rename preset");
+    return resp.json();
+}
+
 export function getShareURL(id) {
     return `${window.location.origin}${window.location.pathname}?preset=${id}`;
 }

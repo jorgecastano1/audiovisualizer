@@ -41,6 +41,9 @@ class Preset(BaseModel):
     rotationSpeed: float
     wireframe: bool
 
+class PresetNameUpdate(BaseModel):
+    name: str
+
 
 @app.get("/")
 def root():
@@ -95,3 +98,15 @@ def delete_preset(preset_id: str):
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Preset not found")
     return {"deleted": preset_id}
+
+@app.patch("/presets/{preset_id}")
+def update_preset_name(preset_id: str, body: PresetNameUpdate):
+    db = get_db()
+    row = db.execute("SELECT id, name, data, created_at FROM presets WHERE id = ?", (preset_id,)).fetchone()
+    if not row:
+        db.close()
+        raise HTTPException(status_code=404, detail="Preset in Database not found")
+        db.execute("UPDATE presets SET name = ? WHERE id = ?", (body.name, preset_id))
+        db.commit()
+        db.close()
+        return {"id": preset_id, "name": body.name, "created_at": row[3], **json.loads(row[2])}
