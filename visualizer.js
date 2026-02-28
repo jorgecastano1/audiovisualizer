@@ -1,6 +1,11 @@
-import * as THREE from "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js";
+import * as THREE from "three";
+import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { Lensflare, LensflareElement } from "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/objects/Lensflare.js";
 
 let scene, camera, renderer, mesh, particles;
+let composer, bloomPass, lensflare;
 let analyser, dataArray;
 let settings = {};
 let audioCtx;
@@ -9,6 +14,11 @@ let rings = [];
 let orbs = [];
 let bgLights = [];
 let flashMesh;
+
+// Playback: use HTML5 <audio> + MediaElementSource for reliable play/pause on Mac/Safari
+let audioElement = null;
+let objectUrl = null;
+let mediaSource = null;
 
 // ─── Scene Init ──────────────────────────────────────────────────────────────
 
@@ -28,14 +38,59 @@ export function initScene() {
     document.getElementById("canvas-container").appendChild(renderer.domElement);
 
     addLights();
+    addLensflare();
+    setupBloom();
 
     window.addEventListener("resize", () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
+        if (composer) {
+            composer.setSize(window.innerWidth, window.innerHeight);
+            composer.setPixelRatio(window.devicePixelRatio);
+        }
     });
 
     animate();
+}
+
+function setupBloom() {
+    composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        settings.bloomStrength ?? 1.5,
+        0.4,
+        0.2
+    );
+    composer.addPass(bloomPass);
+}
+
+function createFlareTexture(size = 64) {
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext("2d");
+    const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    g.addColorStop(0, "rgba(255,255,255,0.9)");
+    g.addColorStop(0.2, "rgba(255,255,255,0.3)");
+    g.addColorStop(0.5, "rgba(255,255,255,0.05)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    const tex = new THREE.CanvasTexture(c);
+    tex.needsUpdate = true;
+    return tex;
+}
+
+function addLensflare() {
+    const flareColor = new THREE.Color(0.7, 0.5, 1);
+    lensflare = new Lensflare();
+    lensflare.addElement(new LensflareElement(createFlareTexture(64), 120, 0, flareColor));
+    lensflare.addElement(new LensflareElement(createFlareTexture(32), 60, 0.4, flareColor));
+    lensflare.addElement(new LensflareElement(createFlareTexture(16), 30, 0.7, new THREE.Color(0.9, 0.8, 1)));
+    lensflare.position.set(4, 3, -4);
+    scene.add(lensflare);
 }
 
 function addLights() {
@@ -63,16 +118,12 @@ export function buildScene(newSettings) {
     const primary = new THREE.Color(settings.colorPrimary);
     const secondary = new THREE.Color(settings.colorSecondary);
 
-    if (settings.geometry === "sphere") {
-        buildSphere(primary, secondary);
-    } else if (settings.geometry === "torus") {
-        buildTorus(primary, secondary);
-    } else if (settings.geometry === "icosahedron") {
-        buildIcosahedron(primary, secondary);
-    } else if (settings.geometry === "particles") {
-        buildParticles(primary);
-    }
+    buildSphere(primary, secondary);
     buildBackground();
+
+    // Pull camera back when sensitivity is higher so the enlarged sphere stays in frame
+    const sens = settings.sensitivity ?? 1.2;
+    camera.position.z = 4 + (sens - 1) * 3;
 }
 
 function buildBackground() {
@@ -117,12 +168,12 @@ function buildBackground() {
     });
 
     // ── Floating orbs (mid) ────────────────────────
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
         const geo = new THREE.SphereGeometry(0.08 + Math.random() * 0.1, 16, 16);
         const mat = new THREE.MeshBasicMaterial({
             color: i % 2 === 0 ? primary : secondary,
             transparent: true,
-            opacity: 0.6,
+            opacity: 0.4,
         });
         const orb = new THREE.Mesh(geo, mat);
         orb.position.set(
@@ -161,79 +212,102 @@ function buildSphere(primary) {
     scene.add(mesh);
 }
 
-function buildTorus(primary) {
-    const geo = new THREE.TorusKnotGeometry(1.2, 0.35, 150, 20);
-    const mat = new THREE.MeshPhongMaterial({
-        color: primary,
-        emissive: primary.clone().multiplyScalar(0.15),
-        shininess: 100,
-        wireframe: settings.wireframe,
-    });
-    mesh = new THREE.Mesh(geo, mat);
-    scene.add(mesh);
-}
+// ─── Audio (HTML5 <audio> + MediaElementSource for reliable play on Mac/Safari) ───
 
-function buildIcosahedron(primary) {
-    const geo = new THREE.IcosahedronGeometry(1.6, 4);
-    const mat = new THREE.MeshPhongMaterial({
-        color: primary,
-        emissive: primary.clone().multiplyScalar(0.2),
-        flatShading: true,
-        wireframe: settings.wireframe,
-    });
-    mesh = new THREE.Mesh(geo, mat);
-    scene.add(mesh);
-}
-
-function buildParticles(primary) {
-    const count = 4000;
-    const geo = new THREE.BufferGeometry();
-    const positions = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) {
-        positions[i * 3]     = (Math.random() - 0.5) * 8;
-        positions[i * 3 + 1] = (Math.random() - 0.5) * 8;
-        positions[i * 3 + 2] = (Math.random() - 0.5) * 8;
-    }
-    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.PointsMaterial({ color: primary, size: 0.04, sizeAttenuation: true });
-    particles = new THREE.Points(geo, mat);
-    scene.add(particles);
-}
-
-// ─── Audio ───────────────────────────────────────────────────────────────────
-
-export async function loadAudio(file) {
-    if (!audioCtx) audioCtx = new AudioContext();
-    if (audioCtx.state === "suspended") await audioCtx.resume();
-
-    const arrayBuffer = await file.arrayBuffer();
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
-    // Stop previous source if any
-    if (window._audioSource) {
-        try { window._audioSource.stop(); } catch {}
-    }
-
+function ensureAudioGraph() {
+    if (!audioElement || !audioCtx) return false;
+    if (analyser) return true;
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 512;
     analyser.smoothingTimeConstant = 0.8;
     dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(analyser);
+    mediaSource = audioCtx.createMediaElementSource(audioElement);
+    mediaSource.connect(analyser);
     analyser.connect(audioCtx.destination);
-    source.start();
-    window._audioSource = source;
-    window._analyserRef = analyser; // exposed for freq bars canvas in index.html
+    window._analyserRef = analyser;
+    return true;
+}
 
-    return audioBuffer.duration;
+export function getAudioCurrentTime() {
+    return audioElement ? audioElement.currentTime : 0;
+}
+
+export function getAudioDuration() {
+    return audioElement && isFinite(audioElement.duration) ? audioElement.duration : 0;
+}
+
+export function isAudioPlaying() {
+    return audioElement ? !audioElement.paused : false;
+}
+
+export async function playAudio() {
+    if (!audioElement) return;
+    if (!audioCtx) audioCtx = new AudioContext();
+    if (audioCtx.state === "suspended") await audioCtx.resume();
+    if (!ensureAudioGraph()) return;
+    await audioElement.play();
+}
+
+export function pauseAudio() {
+    if (audioElement) audioElement.pause();
+}
+
+export async function togglePlayPause() {
+    if (isAudioPlaying()) pauseAudio();
+    else await playAudio();
+}
+
+export function seekAudio(timeInSeconds) {
+    if (!audioElement) return;
+    const d = audioElement.duration;
+    if (!isFinite(d)) return;
+    const t = Math.max(0, Math.min(timeInSeconds, d));
+    audioElement.currentTime = t;
+}
+
+/** @param {HTMLAudioElement} el */
+export function setAudioElement(el) {
+    audioElement = el;
+}
+
+export function clearAudioSource() {
+    if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+    }
+    if (audioElement) audioElement.src = "";
+}
+
+export function loadAudio(file) {
+    return new Promise((resolve, reject) => {
+        if (!audioElement) {
+            reject(new Error("Audio element not set"));
+            return;
+        }
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        objectUrl = URL.createObjectURL(file);
+        audioElement.src = objectUrl;
+        audioElement.load();
+        audioElement.onloadedmetadata = () => {
+            smoothedBands = { subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0, beat: false, onset: false };
+            resolve(audioElement.duration);
+        };
+        audioElement.onerror = () => reject(new Error("Failed to load audio"));
+        audioElement.onended = () => window.dispatchEvent(new CustomEvent("audioEnded"));
+    });
 }
 
 // ─── Animate ─────────────────────────────────────────────────────────────────
 
 const energyHistory = new Array(43).fill(0);
 let prevTreble = 0;
+
+// Smoothed frequency bands for cleaner, less jittery visuals
+const SMOOTHING = 0.45; // lower = smoother, higher = more responsive
+let smoothedBands = {
+    subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0,
+    beat: false, onset: false,
+};
 
 function getBand(low, high) {
     const nyquist = 24000;
@@ -258,14 +332,14 @@ function isBeat() {
 }
 
 function getFrequencyBands() {
-    if (!analyser) return { subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0, beat: false, onset: false };
+    if (!analyser) return smoothedBands;
     analyser.getByteFrequencyData(dataArray);
 
     const treble = getBand(4000, 16000);
     const onset = (treble - prevTreble) > 0.15;
     prevTreble = treble;
 
-    return {
+    const raw = {
         subBass:  getBand(20, 60),
         bass:     getBand(60, 250),
         lowMid:   getBand(250, 500),
@@ -275,6 +349,18 @@ function getFrequencyBands() {
         beat:     isBeat(),
         onset,
     };
+
+    // Lerp smoothed values toward raw for cleaner motion in tune with the music
+    smoothedBands.subBass  = smoothedBands.subBass  * (1 - SMOOTHING) + raw.subBass  * SMOOTHING;
+    smoothedBands.bass     = smoothedBands.bass     * (1 - SMOOTHING) + raw.bass     * SMOOTHING;
+    smoothedBands.lowMid   = smoothedBands.lowMid   * (1 - SMOOTHING) + raw.lowMid   * SMOOTHING;
+    smoothedBands.mid      = smoothedBands.mid      * (1 - SMOOTHING) + raw.mid      * SMOOTHING;
+    smoothedBands.highMid  = smoothedBands.highMid  * (1 - SMOOTHING) + raw.highMid  * SMOOTHING;
+    smoothedBands.treble   = smoothedBands.treble   * (1 - SMOOTHING) + raw.treble   * SMOOTHING;
+    smoothedBands.beat     = raw.beat;
+    smoothedBands.onset    = raw.onset;
+
+    return smoothedBands;
 }
 
 function avg(arr, start, end) {
@@ -285,7 +371,7 @@ function avg(arr, start, end) {
 
 function animateBackground(bands) {
     if (!flashMesh) return;
-    const { subBass, bass, lowMid, mid, treble, onset } = bands;
+    const { subBass, bass, lowMid, mid, treble, beat, onset } = bands;
     const time = Date.now() * 0.001;
     const primary   = new THREE.Color(settings.colorPrimary);
     const secondary = new THREE.Color(settings.colorSecondary);
@@ -294,12 +380,13 @@ function animateBackground(bands) {
         const delay = i * 0.15;
         const pulse = Math.max(0, subBass - delay * 0.3);
         ring.scale.setScalar(1 + pulse * 1.8);
-        ring.material.opacity = pulse * 0.35;
+        ring.material.opacity = pulse * 0.62; // 0.35 = subtle, 0.6–0.8 = vibrant
         ring.material.color.lerpColors(primary, secondary, subBass);
     });
 
     bgLights.forEach((light, i) => {
-        light.intensity = bass * 6 + 0.2;
+        const baseIntensity = bass * 6 + 0.2;
+        light.intensity = beat ? baseIntensity + 3 : baseIntensity;
         light.color.lerpColors(
             i % 2 === 0 ? primary : secondary,
             i % 2 === 0 ? secondary : primary,
@@ -320,8 +407,9 @@ function animateBackground(bands) {
         orb.material.color.lerpColors(primary, secondary, (Math.sin(time + phase) + 1) / 2);
     });
 
-    if (onset) flashMesh.material.opacity = 0.08;
-    flashMesh.material.opacity *= 0.82;
+    // Softer, shorter flash on onset so it doesn’t overpower
+    if (onset) flashMesh.material.opacity = Math.max(flashMesh.material.opacity, 0.05);
+    flashMesh.material.opacity *= 0.88;
     flashMesh.material.color.copy(primary);
 }
 
@@ -332,16 +420,7 @@ function animate() {
     const { subBass, bass, lowMid, mid, highMid, treble, beat, onset } = bands;
 
     if (mesh) {
-        if (settings.geometry === "sphere") {
-            animateSphere(bass, mid, treble);
-        } else if (settings.geometry === "torus") {
-            mesh.rotation.x += delta * settings.rotationSpeed * (1 + mid);
-            mesh.rotation.y += delta * settings.rotationSpeed * 1.3 * (1 + bass);
-        } else if (settings.geometry === "icosahedron") {
-            mesh.rotation.y += delta * settings.rotationSpeed * (1 + mid * 0.5);
-            mesh.rotation.z += delta * settings.rotationSpeed * 0.5;
-            animateVertices(mesh, bass, mid);
-        }
+        animateSphere(bass, mid, treble);
 
         if (mesh.material && !settings.wireframe) {
             const primary = new THREE.Color(settings.colorPrimary);
@@ -349,23 +428,19 @@ function animate() {
             mesh.material.emissive = primary.clone().lerp(secondary, bass).multiplyScalar(bass * 0.6);
         }
 
-        if (beat) mesh.scale.setScalar(1.3);
-        mesh.scale.lerp(new THREE.Vector3(1, 1, 1), 0.08);
-    }
-
-    if (particles) {
-        particles.rotation.y += delta * settings.rotationSpeed * 0.3 * (1 + mid);
-        particles.rotation.x += delta * settings.rotationSpeed * 0.15 * (1 + bass);
-        const positions = particles.geometry.attributes.position.array;
-        for (let i = 0; i < positions.length; i += 3) {
-            positions[i + 1] += Math.sin(Date.now() * 0.001 + i) * bass * 0.02;
-        }
-        particles.geometry.attributes.position.needsUpdate = true;
-        particles.material.size = 0.04 + bass * 0.06;
+        // Beat pulse: snap up on beat, decay back so it feels in tune with tempo
+        const beatLerpSpeed = beat ? 0.35 : 0.12; // faster decay after beat for tighter feel
+        if (beat) mesh.scale.setScalar(1.25);
+        mesh.scale.lerp(new THREE.Vector3(1, 1, 1), beatLerpSpeed);
     }
 
     animateBackground(bands);
-    renderer.render(scene, camera);
+    if (composer) {
+        if (bloomPass) bloomPass.strength = settings.bloomStrength ?? 1.5;
+        composer.render(delta);
+    } else {
+        renderer.render(scene, camera);
+    }
 }
 
 
@@ -380,13 +455,19 @@ function animateSphere(bass, mid, treble) {
 
     const orig = mesh.geometry._originalPositions;
     const time = Date.now() * 0.001;
+    const sharpness = 1.9;
 
     for (let i = 0; i < pos.count; i++) {
         const ix = i * 3, iy = i * 3 + 1, iz = i * 3 + 2;
         const x = orig[ix], y = orig[iy], z = orig[iz];
-
-        const noise = Math.sin(x * 2 + time) * Math.cos(y * 2 + time) * Math.sin(z * 2 + time);
-        const displacement = 1 + bass * 0.5 + noise * mid * 0.3 + treble * 0.08 * Math.sin(time * 3 + i);
+        const r = Math.sqrt(x * x + y * y + z * z) || 1;
+        const theta = Math.atan2(x, z);
+        const phi = Math.acos(Math.max(-1, Math.min(1, y / r)));
+        const noise = Math.sin(theta * 2 + time) * Math.cos(phi * 2 + time) * Math.sin(phi * 3 + time * 0.7);
+        const raw = 1 + bass * 0.5 + noise * mid * 0.35 + treble * 0.1 * Math.sin(time * 3 + theta);
+        const displacement = raw >= 1
+            ? 1 + Math.pow(raw - 1, sharpness)
+            : 1 - Math.pow(1 - raw, sharpness);
 
         pos.array[ix] = x * displacement;
         pos.array[iy] = y * displacement;
@@ -396,23 +477,4 @@ function animateSphere(bass, mid, treble) {
     pos.needsUpdate = true;
     mesh.geometry.computeVertexNormals();
     mesh.rotation.y += 0.002 + mid * settings.rotationSpeed * 0.02;
-}
-
-function animateVertices(mesh, bass, mid) {
-    const pos = mesh.geometry.attributes.position;
-    if (!mesh.geometry._originalPositions) {
-        mesh.geometry._originalPositions = pos.array.slice();
-    }
-    const orig = mesh.geometry._originalPositions;
-    const time = Date.now() * 0.001;
-
-    for (let i = 0; i < pos.count; i++) {
-        const ix = i * 3, iy = i * 3 + 1, iz = i * 3 + 2;
-        const displacement = 1 + bass * 0.6 + mid * 0.2 * Math.sin(time + i * 0.5);
-        pos.array[ix] = orig[ix] * displacement;
-        pos.array[iy] = orig[iy] * displacement;
-        pos.array[iz] = orig[iz] * displacement;
-    }
-    pos.needsUpdate = true;
-    mesh.geometry.computeVertexNormals();
 }
