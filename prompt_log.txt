@@ -1,0 +1,77 @@
+CONVERSATION REFERENCE – WAVFORM Audiovisualizer
+================================================
+
+This file summarizes the main prompts and answers from our conversation for your reference.
+
+
+1. SAVE PLAYLIST WITH PRESET
+   - You wanted to save the playlist along with preset colors. Constraint: we cannot store File objects or blob URLs in the DB. So we store only track names (and order). On load, show those names as a hint; user re-adds files to play.
+   - Backend: add optional playlist: Optional[List[str]] to Preset model; no DB migration (data is JSON). Frontend: when saving, include playlist names (e.g. getPlaylistNames from index.html); when loading, show "Saved with: Track1, Track2" or similar.
+
+
+2. SQLITE BACKEND LEARNING GUIDE
+   - main.py: FastAPI + SQLite (presets.db) + Pydantic. get_db() opens connection and creates presets table (id, name, data TEXT, created_at). The full preset is stored as one JSON string in data. save_preset: POST body → Preset model → model_dump_json() → INSERT. get_preset: SELECT name, data, created_at → return { id, name, created_at, **json.loads(row[1]) }. list_presets: SELECT id, name, created_at only (no data). To add new features: add field to Pydantic (same table) or new table + new endpoints.
+
+
+3. REMOVE ALL OBJECTS EXCEPT SPHERE
+   - index.html: Shape dropdown now only has "Sphere". visualizer.js: buildScene only calls buildSphere(); animate() only runs animateSphere(). Removed buildBox, buildTorus, buildDonut, buildIcosahedron, buildOctahedron, buildParticles and animateVertices. Kept particles variable/cleanup for safety.
+
+
+4. CAMERA KEEPING OBJECT IN FRAME (SENSITIVITY)
+   - When sensitivity is high, the sphere bulges and can go out of frame. Fix: in buildScene(), set camera.position.z = 4 + (settings.sensitivity - 1) * 3 so the camera pulls back as sensitivity increases. Runs every time settings change.
+
+
+5. main.py EXPLANATION (FROM LINE 8)
+   - app = FastAPI, CORS middleware (allow frontend to call API). DB_PATH, get_db() (connect + CREATE TABLE IF NOT EXISTS). Preset Pydantic model (validates request body). root() = health check GET /. save_preset: POST /presets, uuid id, model_dump_json() in data column, return { id }. get_preset: GET /presets/{id}, SELECT name/data/created_at, return merged object; 404 if not found. list_presets: GET /presets, return list of { id, name, created_at }. delete_preset: DELETE by id, 404 if no row.
+
+
+6. ADDING update_preset_name (PATCH) FOR FASTAPI PRACTICE
+   - PresetNameUpdate model: name: str. Endpoint PATCH /presets/{preset_id} with body: PresetNameUpdate. Path param preset_id, request body parsed by FastAPI. UPDATE presets SET name = ? WHERE id = ?; return full preset. Use from terminal: curl -X PATCH "http://localhost:8000/presets/ID" -H "Content-Type: application/json" -d '{"name": "New Name"}'.
+
+
+7. PURPOSE OF main.py FUNCTIONS / USING FROM VISUALIZER
+   - main.py functions run on the server; they handle HTTP and DB. The visualizer cannot "call" them directly; it calls them over the network via fetch in api.js. So to use update_preset_name from the app, add a frontend function (e.g. renamePreset in api.js) that sends PATCH, then wire UI to call it.
+
+
+8. api.js EXPLANATION
+   - API_BASE = Railway (or localhost) URL. savePreset: POST /presets, body JSON.stringify(preset), returns { id }. fetchPreset: GET /presets/{id}, returns full preset. listPresets: GET /presets, returns array. getShareURL(id): build ?preset=id URL. getPresetIdFromURL(): read preset from current URL query. Response body is whatever the server sends (e.g. save returns only { id } because the backend returns only that).
+
+
+9. HOW FILES INTERACT WITH API WHEN LOADING A SAVED PRESET
+   - Shared link (?preset=id): index.html runs initControls → controls.js gets presetId from URL, calls fetchPreset(presetId) from api.js → GET /presets/{id} → backend returns JSON → applyPreset(preset) updates currentSettings and DOM → onSettingsChange triggers buildScene(settings) in visualizer.js. Sidebar click: controls.js list item click → fetchPreset(p.id) → dispatch loadPreset event → index.html handler calls applyPreset(e.detail) and buildScene. Only api.js and controls.js talk to the API; visualizer receives settings and draws.
+
+
+10. GIT PUSH AND CHANGES
+    - git push only sends existing commits. You must git add and git commit first for your changes to be pushed. Whether the live site updates depends on deployment (e.g. Railway/Vercel auto-deploy on push, or manual deploy).
+
+
+11. resp.json() RETURNING ONLY ID
+    - Request body (what we send) and response body (what the server sends back) are different. We send the full preset; the backend save_preset returns only {"id": preset_id}. resp.json() parses whatever the server put in the response; the backend defines that in main.py with return {"id": preset_id}.
+
+
+12. get_preset row[0] vs list_presets r[1] FOR NAME
+    - Indices match the order of columns in the SELECT, not the table. get_preset: SELECT name, data, created_at → row[0]=name, row[1]=data, row[2]=created_at. list_presets: SELECT id, name, created_at → r[0]=id, r[1]=name, r[2]=created_at. So name is [0] in one and [1] in the other because the SELECT lists differ.
+
+
+13. row vs r IN list_presets
+    - get_preset uses fetchone() → one row → variable "row". list_presets uses fetchall() → list of rows → variable "rows"; in the loop each row is "r". So row[0] vs r[0] is just naming (one row vs current row in loop). Same indexing idea.
+
+
+14. STOPPING THE LOCAL SERVER
+    - Press Ctrl+C in the terminal where the server is running. Then you can run git add / git commit. Or use a second terminal for git without stopping the server.
+
+
+15. USING update_preset_name
+    - From terminal: curl PATCH with preset id and JSON body {"name": "New Name"}. From the app: add renamePreset(id, newName) in api.js and UI (e.g. Rename button) that calls it and refreshes the list.
+
+
+16. ADDING THE RENAME FEATURE (FRONTEND)
+    - api.js: renamePreset(id, newName) – PATCH /presets/{id} with body { name: newName }. controls.js: import renamePreset; each preset row gets a ✎ button; click → stopPropagation, prompt("New preset name:", p.name), then renamePreset(p.id, newName.trim()), loadPresetList(), showToast. Row click checks !e.target.closest(".preset-rename-btn") so clicking ✎ doesn’t load the preset. index.html: .preset-rename-btn style (small, hover primary).
+
+
+17. PENCIL BUTTON LOCATION
+    - The ✎ rename button is on your frontend UI (the WAVFORM app sidebar preset list), not on the FastAPI website. FastAPI only exposes the API; the docs at /docs show the PATCH route but have no custom UI. The pencil is drawn by your controls.js/index.html.
+
+
+---
+End of conversation reference. You can copy this file or its contents for your notes.
